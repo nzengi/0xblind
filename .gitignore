@@ -1,0 +1,13 @@
+# Move/Sui build artifacts
+build/
+
+# Move lock file
+Move.lock
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# VS Code / IDE files
+.vscode/
+.idea/
