@@ -151,46 +151,59 @@ module blind::pool {
         transfer::public_transfer(record, sender);
     }
 
-    /// Split: Divide one encrypted record into two
+    /// Split: Divide one encrypted record into two (PRODUCTION-SAFE)
     /// 
-    /// This is the core private transfer mechanism:
-    /// - User creates two new ciphertexts off-chain (e.g., Enc(40) and Enc(60))
-    /// - Protocol verifies sum is preserved: Enc(100) = Enc(40) + Enc(60)
-    /// - User can transfer one output to another address
+    /// This function requires revealing amounts to prevent inflation attacks.
+    /// The amounts are verified on-chain to ensure no value is created from nothing.
     /// 
     /// # Arguments
     /// * `record` - The input record to split (consumed)
-    /// * `out1_cipher` - First output ciphertext
-    /// * `out2_cipher` - Second output ciphertext
-    /// * `r_delta` - Randomness difference for rotation
+    /// * `input_r` - Randomness used when creating the input record
+    /// * `amount1` - First output amount (plaintext)
+    /// * `r1` - Randomness for first output
+    /// * `amount2` - Second output amount (plaintext)
+    /// * `r2` - Randomness for second output
     /// 
     /// # Effects
+    /// - Verifies input ciphertext matches claimed values
+    /// - Verifies amount1 + amount2 == input_amount
     /// - Destroys input record
-    /// - Creates two new EncryptedRecords
+    /// - Creates two new EncryptedRecords with verified amounts
     /// - Emits SplitEvent
     public fun split(
         record: EncryptedRecord,
-        out1_cipher: Ciphertext,
-        out2_cipher: Ciphertext,
-        r_delta: Element<Scalar>,
+        input_r: Element<Scalar>,
+        amount1: u64,
+        r1: Element<Scalar>,
+        amount2: u64,
+        r2: Element<Scalar>,
         ctx: &mut TxContext
     ) {
         let sender = tx_context::sender(ctx);
         let input_addr = object::uid_to_address(&record.id);
         let source_shard = record.source_shard;
         
-        // 1. Unpack and destroy input record
+        // 1. Unpack input record
         let EncryptedRecord { id, cipher_balance: input_cipher, source_shard: _ } = record;
+        
+        // 2. Calculate input amount from outputs
+        let input_amount = amount1 + amount2;
+        
+        // 3. Verify with amounts - prevents inflation attacks
+        let (out1_cipher, out2_cipher) = blind::proof::verify_split_with_amounts(
+            &input_cipher,
+            input_amount,
+            input_r,
+            amount1,
+            r1,
+            amount2,
+            r2
+        );
+        
+        // 4. Delete input record
         object::delete(id);
 
-        // 2. Verify homomorphic consistency with rotation
-        blind::proof::verify_split_with_rotation(&input_cipher, &out1_cipher, &out2_cipher, r_delta);
-
-        // 3. Verify range proofs (currently mock - see security notes)
-        blind::proof::verify_range_proof(&out1_cipher);
-        blind::proof::verify_range_proof(&out2_cipher);
-
-        // 4. Create new records (inherit source_shard for withdrawal routing)
+        // 5. Create new records with verified ciphertexts
         let out1 = EncryptedRecord { 
             id: object::new(ctx), 
             cipher_balance: out1_cipher,
@@ -205,7 +218,7 @@ module blind::pool {
         let out1_addr = object::uid_to_address(&out1.id);
         let out2_addr = object::uid_to_address(&out2.id);
 
-        // 5. Emit event
+        // 6. Emit event
         event::emit(SplitEvent {
             input_record_id: input_addr,
             output1_record_id: out1_addr,
@@ -213,7 +226,7 @@ module blind::pool {
             sender,
         });
 
-        // 6. Transfer outputs to sender
+        // 7. Transfer outputs to sender
         transfer::public_transfer(out1, sender);
         transfer::public_transfer(out2, sender);
     }
